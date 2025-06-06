@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Part 7 - Introduction to the B-Tree | Let’s Build a Simple Database</title>
+<meta name="generator" content="Jekyll v3.9.5" />
+<meta property="og:title" content="Part 7 - Introduction to the B-Tree" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="The B-Tree is the data structure SQLite uses to represent both tables and indexes, so it’s a pretty central idea. This article will just introduce the data structure, so it won’t have any code." />
+<meta property="og:description" content="The B-Tree is the data structure SQLite uses to represent both tables and indexes, so it’s a pretty central idea. This article will just introduce the data structure, so it won’t have any code." />
+<link rel="canonical" href="https://cstack.github.io/db_tutorial/parts/part7.html" />
+<meta property="og:url" content="https://cstack.github.io/db_tutorial/parts/part7.html" />
+<meta property="og:site_name" content="Let’s Build a Simple Database" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2017-09-23T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Part 7 - Introduction to the B-Tree" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2017-09-23T00:00:00+00:00","datePublished":"2017-09-23T00:00:00+00:00","description":"The B-Tree is the data structure SQLite uses to represent both tables and indexes, so it’s a pretty central idea. This article will just introduce the data structure, so it won’t have any code.","headline":"Part 7 - Introduction to the B-Tree","mainEntityOfPage":{"@type":"WebPage","@id":"https://cstack.github.io/db_tutorial/parts/part7.html"},"url":"https://cstack.github.io/db_tutorial/parts/part7.html"}</script>
+<!-- End Jekyll SEO tag -->
+
+
+    <link rel="stylesheet" href="/db_tutorial/assets/css/style.css?v=60b50c5b7be787a4aaa1e50ab8a90c6cabb75159">
+    <meta name="viewport" content="width=device-width">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>Let's Build a Simple Database</h1>
+        <p>Writing a sqlite clone from scratch in C</p>
+
+        <p class="view"><a href="/db_tutorial/">Overview</a></p>
+
+        
+          <p class="view"><a href="https://github.com/cstack/db_tutorial">View on GitHub (pull requests welcome)</a></p>
+        
+
+        
+
+        
+
+        <div style="color:#721c24;background-color:#f8d7da;border-color:#f5c6cb;padding:.75rem 1.25rem;border-radius:.25rem;margin-bottom:1rem">
+          <p><b>This project is no longer under active development.</b> You can read more <a href="/db_tutorial/parts/part15.html">here</a>. But if you'd like to keep learning how to make your own SQLite clone from scratch, or one of many other projects like Docker, Redis, Git or BitTorrent, try <a href="https://app.codecrafters.io/join?via=cstack"><b>CodeCrafters</b></a>.</p>
+        </div>
+        <div>
+          <a href="https://app.codecrafters.io/join?via=cstack"><img src="https://cstack.github.io/db_tutorial/assets/images/code-crafters.jpeg" alt=""/></a>
+        </div>
+      </header>
+      <section>
+
+      
+      
+
+      <h1>Part 7 - Introduction to the B-Tree</h1>
+      
+          <p><a class="prev" href="/db_tutorial/parts/part6.html">Part 6 - The Cursor Abstraction</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part8.html">Part 8 - B-Tree Leaf Node Format</a> <br></p>
+      
+
+      <p>The B-Tree is the data structure SQLite uses to represent both tables and indexes, so it’s a pretty central idea. This article will just introduce the data structure, so it won’t have any code.</p>
+
+<p>Why is a tree a good data structure for a database?</p>
+
+<ul>
+  <li>Searching for a particular value is fast (logarithmic time)</li>
+  <li>Inserting / deleting a value you’ve already found is fast (constant-ish time to rebalance)</li>
+  <li>Traversing a range of values is fast (unlike a hash map)</li>
+</ul>
+
+<p>A B-Tree is different from a binary tree (the “B” probably stands for the inventor’s name, but could also stand for “balanced”). Here’s an example B-Tree:</p>
+
+<table class="image">
+<caption align="bottom">example B-Tree (https://en.wikipedia.org/wiki/File:B-tree.svg)</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/B-tree.png"><img src="https://cstack.github.io/db_tutorial/assets/images/B-tree.png" alt="example B-Tree (https://en.wikipedia.org/wiki/File:B-tree.svg)" /></a></td></tr>
+</table>
+
+<p>Unlike a binary tree, each node in a B-Tree can have more than 2 children. Each node can have up to m children, where m is called the tree’s “order”. To keep the tree mostly balanced, we also say nodes have to have at least m/2 children (rounded up).</p>
+
+<p>Exceptions:</p>
+<ul>
+  <li>Leaf nodes have 0 children</li>
+  <li>The root node can have fewer than m children but must have at least 2</li>
+  <li>If the root node is a leaf node (the only node), it still has 0 children</li>
+</ul>
+
+<p>The picture from above is a B-Tree, which SQLite uses to store indexes. To store tables, SQLites uses a variation called a B+ tree.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th> </th>
+      <th>B-tree</th>
+      <th>B+ tree</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Pronounced</td>
+      <td>“Bee Tree”</td>
+      <td>“Bee Plus Tree”</td>
+    </tr>
+    <tr>
+      <td>Used to store</td>
+      <td>Indexes</td>
+      <td>Tables</td>
+    </tr>
+    <tr>
+      <td>Internal nodes store keys</td>
+      <td>Yes</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td>Internal nodes store values</td>
+      <td>Yes</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Number of children per node</td>
+      <td>Less</td>
+      <td>More</td>
+    </tr>
+    <tr>
+      <td>Internal nodes vs. leaf nodes</td>
+      <td>Same structure</td>
+      <td>Different structure</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Until we get to implementing indexes, I’m going to talk solely about B+ trees, but I’ll just refer to it as a B-tree or a btree.</p>
+
+<p>Nodes with children are called “internal” nodes. Internal nodes and leaf nodes are structured differently:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>For an order-m tree…</th>
+      <th>Internal Node</th>
+      <th>Leaf Node</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Stores</td>
+      <td>keys and pointers to children</td>
+      <td>keys and values</td>
+    </tr>
+    <tr>
+      <td>Number of keys</td>
+      <td>up to m-1</td>
+      <td>as many as will fit</td>
+    </tr>
+    <tr>
+      <td>Number of pointers</td>
+      <td>number of keys + 1</td>
+      <td>none</td>
+    </tr>
+    <tr>
+      <td>Number of values</td>
+      <td>none</td>
+      <td>number of keys</td>
+    </tr>
+    <tr>
+      <td>Key purpose</td>
+      <td>used for routing</td>
+      <td>paired with value</td>
+    </tr>
+    <tr>
+      <td>Stores values?</td>
+      <td>No</td>
+      <td>Yes</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Let’s work through an example to see how a B-tree grows as you insert elements into it. To keep things simple, the tree will be order 3. That means:</p>
+
+<ul>
+  <li>up to 3 children per internal node</li>
+  <li>up to 2 keys per internal node</li>
+  <li>at least 2 children per internal node</li>
+  <li>at least 1 key per internal node</li>
+</ul>
+
+<p>An empty B-tree has a single node: the root node. The root node starts as a leaf node with zero key/value pairs:</p>
+
+<table class="image">
+<caption align="bottom">empty btree</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/btree1.png"><img src="https://cstack.github.io/db_tutorial/assets/images/btree1.png" alt="empty btree" /></a></td></tr>
+</table>
+
+<p>If we insert a couple key/value pairs, they are stored in the leaf node in sorted order.</p>
+
+<table class="image">
+<caption align="bottom">one-node btree</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/btree2.png"><img src="https://cstack.github.io/db_tutorial/assets/images/btree2.png" alt="one-node btree" /></a></td></tr>
+</table>
+
+<p>Let’s say that the capacity of a leaf node is two key/value pairs. When we insert another, we have to split the leaf node and put half the pairs in each node. Both nodes become children of a new internal node which will now be the root node.</p>
+
+<table class="image">
+<caption align="bottom">two-level btree</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/btree3.png"><img src="https://cstack.github.io/db_tutorial/assets/images/btree3.png" alt="two-level btree" /></a></td></tr>
+</table>
+
+<p>The internal node has 1 key and 2 pointers to child nodes. If we want to look up a key that is less than or equal to 5, we look in the left child. If we want to look up a key greater than 5, we look in the right child.</p>
+
+<p>Now let’s insert the key “2”. First we look up which leaf node it would be in if it was present, and we arrive at the left leaf node. The node is full, so we split the leaf node and create a new entry in the parent node.</p>
+
+<table class="image">
+<caption align="bottom">four-node btree</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/btree4.png"><img src="https://cstack.github.io/db_tutorial/assets/images/btree4.png" alt="four-node btree" /></a></td></tr>
+</table>
+
+<p>Let’s keep adding keys. 18 and 21. We get to the point where we have to split again, but there’s no room in the parent node for another key/pointer pair.</p>
+
+<table class="image">
+<caption align="bottom">no room in internal node</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/btree5.png"><img src="https://cstack.github.io/db_tutorial/assets/images/btree5.png" alt="no room in internal node" /></a></td></tr>
+</table>
+
+<p>The solution is to split the root node into two internal nodes, then create new root node to be their parent.</p>
+
+<table class="image">
+<caption align="bottom">three-level btree</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/btree6.png"><img src="https://cstack.github.io/db_tutorial/assets/images/btree6.png" alt="three-level btree" /></a></td></tr>
+</table>
+
+<p>The depth of the tree only increases when we split the root node. Every leaf node has the same depth and close to the same number of key/value pairs, so the tree remains balanced and quick to search.</p>
+
+<p>I’m going to hold off on discussion of deleting keys from the tree until after we’ve implemented insertion.</p>
+
+<p>When we implement this data structure, each node will correspond to one page. The root node will exist in page 0. Child pointers will simply be the page number that contains the child node.</p>
+
+<p>Next time, we start implementing the btree!</p>
+
+
+      
+          <p><a class="prev" href="/db_tutorial/parts/part6.html">Part 6 - The Cursor Abstraction</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part8.html">Part 8 - B-Tree Leaf Node Format</a> <br></p>
+      
+
+      </section>
+      <footer>
+        
+        <p><a href="/db_tutorial/feed.xml">rss</a> | <a href="https://ifttt.com/applets/60708433d-rss-feed-to-email">subscribe by email</a></p>
+        <p>This project is maintained by <a href="https://github.com/cstack">cstack</a></p>
+        
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="/db_tutorial/assets/js/scale.fix.js"></script>
+
+
+  
+    <script>
+        (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+        (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+        m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+        })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+        ga('create', 'UA-105767942-1', 'auto');
+        ga('send', 'pageview');
+    </script>
+  
+  </body>
+</html>

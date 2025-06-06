@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Part 2 - World’s Simplest SQL Compiler and Virtual Machine | Let’s Build a Simple Database</title>
+<meta name="generator" content="Jekyll v3.9.5" />
+<meta property="og:title" content="Part 2 - World’s Simplest SQL Compiler and Virtual Machine" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="We’re making a clone of sqlite. The “front-end” of sqlite is a SQL compiler that parses a string and outputs an internal representation called bytecode." />
+<meta property="og:description" content="We’re making a clone of sqlite. The “front-end” of sqlite is a SQL compiler that parses a string and outputs an internal representation called bytecode." />
+<link rel="canonical" href="https://cstack.github.io/db_tutorial/parts/part2.html" />
+<meta property="og:url" content="https://cstack.github.io/db_tutorial/parts/part2.html" />
+<meta property="og:site_name" content="Let’s Build a Simple Database" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2017-08-31T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Part 2 - World’s Simplest SQL Compiler and Virtual Machine" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2017-08-31T00:00:00+00:00","datePublished":"2017-08-31T00:00:00+00:00","description":"We’re making a clone of sqlite. The “front-end” of sqlite is a SQL compiler that parses a string and outputs an internal representation called bytecode.","headline":"Part 2 - World’s Simplest SQL Compiler and Virtual Machine","mainEntityOfPage":{"@type":"WebPage","@id":"https://cstack.github.io/db_tutorial/parts/part2.html"},"url":"https://cstack.github.io/db_tutorial/parts/part2.html"}</script>
+<!-- End Jekyll SEO tag -->
+
+
+    <link rel="stylesheet" href="/db_tutorial/assets/css/style.css?v=60b50c5b7be787a4aaa1e50ab8a90c6cabb75159">
+    <meta name="viewport" content="width=device-width">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>Let's Build a Simple Database</h1>
+        <p>Writing a sqlite clone from scratch in C</p>
+
+        <p class="view"><a href="/db_tutorial/">Overview</a></p>
+
+        
+          <p class="view"><a href="https://github.com/cstack/db_tutorial">View on GitHub (pull requests welcome)</a></p>
+        
+
+        
+
+        
+
+        <div style="color:#721c24;background-color:#f8d7da;border-color:#f5c6cb;padding:.75rem 1.25rem;border-radius:.25rem;margin-bottom:1rem">
+          <p><b>This project is no longer under active development.</b> You can read more <a href="/db_tutorial/parts/part15.html">here</a>. But if you'd like to keep learning how to make your own SQLite clone from scratch, or one of many other projects like Docker, Redis, Git or BitTorrent, try <a href="https://app.codecrafters.io/join?via=cstack"><b>CodeCrafters</b></a>.</p>
+        </div>
+        <div>
+          <a href="https://app.codecrafters.io/join?via=cstack"><img src="https://cstack.github.io/db_tutorial/assets/images/code-crafters.jpeg" alt=""/></a>
+        </div>
+      </header>
+      <section>
+
+      
+      
+
+      <h1>Part 2 - World's Simplest SQL Compiler and Virtual Machine</h1>
+      
+          <p><a class="prev" href="/db_tutorial/parts/part1.html">Part 1 - Introduction and Setting up the REPL</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part3.html">Part 3 - An In-Memory, Append-Only, Single-Table Database</a> <br></p>
+      
+
+      <p>We’re making a clone of sqlite. The “front-end” of sqlite is a SQL compiler that parses a string and outputs an internal representation called bytecode.</p>
+
+<p>This bytecode is passed to the virtual machine, which executes it.</p>
+
+<table class="image">
+<caption align="bottom">SQLite Architecture (https://www.sqlite.org/arch.html)</caption>
+<tr><td><a href="https://cstack.github.io/db_tutorial/assets/images/arch2.gif"><img src="https://cstack.github.io/db_tutorial/assets/images/arch2.gif" alt="SQLite Architecture (https://www.sqlite.org/arch.html)" /></a></td></tr>
+</table>
+
+<p>Breaking things into two steps like this has a couple advantages:</p>
+<ul>
+  <li>Reduces the complexity of each part (e.g. virtual machine does not worry about syntax errors)</li>
+  <li>Allows compiling common queries once and caching the bytecode for improved performance</li>
+</ul>
+
+<p>With this in mind, let’s refactor our <code class="language-plaintext highlighter-rouge">main</code> function and support two new keywords in the process:</p>
+
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code> int main(int argc, char* argv[]) {
+   InputBuffer* input_buffer = new_input_buffer();
+   while (true) {
+     print_prompt();
+     read_input(input_buffer);
+
+-    if (strcmp(input_buffer-&gt;buffer, ".exit") == 0) {
+<span class="gd">-      exit(EXIT_SUCCESS);
+-    } else {
+-      printf("Unrecognized command '%s'.\n", input_buffer-&gt;buffer);
+</span><span class="gi">+    if (input_buffer-&gt;buffer[0] == '.') {
++      switch (do_meta_command(input_buffer)) {
++        case (META_COMMAND_SUCCESS):
++          continue;
++        case (META_COMMAND_UNRECOGNIZED_COMMAND):
++          printf("Unrecognized command '%s'\n", input_buffer-&gt;buffer);
++          continue;
++      }
+</span>     }
+<span class="gi">+
++    Statement statement;
++    switch (prepare_statement(input_buffer, &amp;statement)) {
++      case (PREPARE_SUCCESS):
++        break;
++      case (PREPARE_UNRECOGNIZED_STATEMENT):
++        printf("Unrecognized keyword at start of '%s'.\n",
++               input_buffer-&gt;buffer);
++        continue;
++    }
++
++    execute_statement(&amp;statement);
++    printf("Executed.\n");
+</span>   }
+ }
+</code></pre></div></div>
+
+<p>Non-SQL statements like <code class="language-plaintext highlighter-rouge">.exit</code> are called “meta-commands”. They all start with a dot, so we check for them and handle them in a separate function.</p>
+
+<p>Next, we add a step that converts the line of input into our internal representation of a statement. This is our hacky version of the sqlite front-end.</p>
+
+<p>Lastly, we pass the prepared statement to <code class="language-plaintext highlighter-rouge">execute_statement</code>. This function will eventually become our virtual machine.</p>
+
+<p>Notice that two of our new functions return enums indicating success or failure:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">typedef</span> <span class="k">enum</span> <span class="p">{</span>
+  <span class="n">META_COMMAND_SUCCESS</span><span class="p">,</span>
+  <span class="n">META_COMMAND_UNRECOGNIZED_COMMAND</span>
+<span class="p">}</span> <span class="n">MetaCommandResult</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="k">enum</span> <span class="p">{</span> <span class="n">PREPARE_SUCCESS</span><span class="p">,</span> <span class="n">PREPARE_UNRECOGNIZED_STATEMENT</span> <span class="p">}</span> <span class="n">PrepareResult</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>“Unrecognized statement”? That seems a bit like an exception. I prefer not to use exceptions (and C doesn’t even support them), so I’m using enum result codes wherever practical. The C compiler will complain if my switch statement doesn’t handle a member of the enum, so we can feel a little more confident we handle every result of a function. Expect more result codes to be added in the future.</p>
+
+<p><code class="language-plaintext highlighter-rouge">do_meta_command</code> is just a wrapper for existing functionality that leaves room for more commands:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">MetaCommandResult</span> <span class="nf">do_meta_command</span><span class="p">(</span><span class="n">InputBuffer</span><span class="o">*</span> <span class="n">input_buffer</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">input_buffer</span><span class="o">-&gt;</span><span class="n">buffer</span><span class="p">,</span> <span class="s">".exit"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">exit</span><span class="p">(</span><span class="n">EXIT_SUCCESS</span><span class="p">);</span>
+  <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="n">META_COMMAND_UNRECOGNIZED_COMMAND</span><span class="p">;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Our “prepared statement” right now just contains an enum with two possible values. It will contain more data as we allow parameters in statements:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">typedef</span> <span class="k">enum</span> <span class="p">{</span> <span class="n">STATEMENT_INSERT</span><span class="p">,</span> <span class="n">STATEMENT_SELECT</span> <span class="p">}</span> <span class="n">StatementType</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
+  <span class="n">StatementType</span> <span class="n">type</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">Statement</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p><code class="language-plaintext highlighter-rouge">prepare_statement</code> (our “SQL Compiler”) does not understand SQL right now. In fact, it only understands two words:</p>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">PrepareResult</span> <span class="nf">prepare_statement</span><span class="p">(</span><span class="n">InputBuffer</span><span class="o">*</span> <span class="n">input_buffer</span><span class="p">,</span>
+                                <span class="n">Statement</span><span class="o">*</span> <span class="n">statement</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">strncmp</span><span class="p">(</span><span class="n">input_buffer</span><span class="o">-&gt;</span><span class="n">buffer</span><span class="p">,</span> <span class="s">"insert"</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">statement</span><span class="o">-&gt;</span><span class="n">type</span> <span class="o">=</span> <span class="n">STATEMENT_INSERT</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">PREPARE_SUCCESS</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">input_buffer</span><span class="o">-&gt;</span><span class="n">buffer</span><span class="p">,</span> <span class="s">"select"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">statement</span><span class="o">-&gt;</span><span class="n">type</span> <span class="o">=</span> <span class="n">STATEMENT_SELECT</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">PREPARE_SUCCESS</span><span class="p">;</span>
+  <span class="p">}</span>
+
+  <span class="k">return</span> <span class="n">PREPARE_UNRECOGNIZED_STATEMENT</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Note that we use <code class="language-plaintext highlighter-rouge">strncmp</code> for “insert” since the “insert” keyword will be followed by data. (e.g. <code class="language-plaintext highlighter-rouge">insert 1 cstack foo@bar.com</code>)</p>
+
+<p>Lastly, <code class="language-plaintext highlighter-rouge">execute_statement</code> contains a few stubs:</p>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">execute_statement</span><span class="p">(</span><span class="n">Statement</span><span class="o">*</span> <span class="n">statement</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">switch</span> <span class="p">(</span><span class="n">statement</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="p">(</span><span class="n">STATEMENT_INSERT</span><span class="p">):</span>
+      <span class="n">printf</span><span class="p">(</span><span class="s">"This is where we would do an insert.</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+      <span class="k">break</span><span class="p">;</span>
+    <span class="k">case</span> <span class="p">(</span><span class="n">STATEMENT_SELECT</span><span class="p">):</span>
+      <span class="n">printf</span><span class="p">(</span><span class="s">"This is where we would do a select.</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+      <span class="k">break</span><span class="p">;</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Note that it doesn’t return any error codes because there’s nothing that could go wrong yet.</p>
+
+<p>With these refactors, we now recognize two new keywords!</p>
+<pre><code class="language-command-line">~ ./db
+db &gt; insert foo bar
+This is where we would do an insert.
+Executed.
+db &gt; delete foo
+Unrecognized keyword at start of 'delete foo'.
+db &gt; select
+This is where we would do a select.
+Executed.
+db &gt; .tables
+Unrecognized command '.tables'
+db &gt; .exit
+~
+</code></pre>
+
+<p>The skeleton of our database is taking shape… wouldn’t it be nice if it stored data? In the next part, we’ll implement <code class="language-plaintext highlighter-rouge">insert</code> and <code class="language-plaintext highlighter-rouge">select</code>, creating the world’s worst data store. In the mean time, here’s the entire diff from this part:</p>
+
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">@@ -10,6 +10,23 @@</span> struct InputBuffer_t {
+ } InputBuffer;
+ 
+<span class="gi">+typedef enum {
++  META_COMMAND_SUCCESS,
++  META_COMMAND_UNRECOGNIZED_COMMAND
++} MetaCommandResult;
++
++typedef enum { PREPARE_SUCCESS, PREPARE_UNRECOGNIZED_STATEMENT } PrepareResult;
++
++typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
++
++typedef struct {
++  StatementType type;
++} Statement;
++
+</span> InputBuffer* new_input_buffer() {
+   InputBuffer* input_buffer = malloc(sizeof(InputBuffer));
+   input_buffer-&gt;buffer = NULL;
+<span class="p">@@ -40,17 +57,67 @@</span> void close_input_buffer(InputBuffer* input_buffer) {
+     free(input_buffer);
+ }
+ 
+<span class="gi">+MetaCommandResult do_meta_command(InputBuffer* input_buffer) {
++  if (strcmp(input_buffer-&gt;buffer, ".exit") == 0) {
++    close_input_buffer(input_buffer);
++    exit(EXIT_SUCCESS);
++  } else {
++    return META_COMMAND_UNRECOGNIZED_COMMAND;
++  }
++}
++
++PrepareResult prepare_statement(InputBuffer* input_buffer,
++                                Statement* statement) {
++  if (strncmp(input_buffer-&gt;buffer, "insert", 6) == 0) {
++    statement-&gt;type = STATEMENT_INSERT;
++    return PREPARE_SUCCESS;
++  }
++  if (strcmp(input_buffer-&gt;buffer, "select") == 0) {
++    statement-&gt;type = STATEMENT_SELECT;
++    return PREPARE_SUCCESS;
++  }
++
++  return PREPARE_UNRECOGNIZED_STATEMENT;
++}
++
++void execute_statement(Statement* statement) {
++  switch (statement-&gt;type) {
++    case (STATEMENT_INSERT):
++      printf("This is where we would do an insert.\n");
++      break;
++    case (STATEMENT_SELECT):
++      printf("This is where we would do a select.\n");
++      break;
++  }
++}
++
+</span> int main(int argc, char* argv[]) {
+   InputBuffer* input_buffer = new_input_buffer();
+   while (true) {
+     print_prompt();
+     read_input(input_buffer);
+ 
+<span class="gd">-    if (strcmp(input_buffer-&gt;buffer, ".exit") == 0) {
+-      close_input_buffer(input_buffer);
+-      exit(EXIT_SUCCESS);
+-    } else {
+-      printf("Unrecognized command '%s'.\n", input_buffer-&gt;buffer);
+</span><span class="gi">+    if (input_buffer-&gt;buffer[0] == '.') {
++      switch (do_meta_command(input_buffer)) {
++        case (META_COMMAND_SUCCESS):
++          continue;
++        case (META_COMMAND_UNRECOGNIZED_COMMAND):
++          printf("Unrecognized command '%s'\n", input_buffer-&gt;buffer);
++          continue;
++      }
+</span>     }
+<span class="gi">+
++    Statement statement;
++    switch (prepare_statement(input_buffer, &amp;statement)) {
++      case (PREPARE_SUCCESS):
++        break;
++      case (PREPARE_UNRECOGNIZED_STATEMENT):
++        printf("Unrecognized keyword at start of '%s'.\n",
++               input_buffer-&gt;buffer);
++        continue;
++    }
++
++    execute_statement(&amp;statement);
++    printf("Executed.\n");
+</span>   }
+ }
+</code></pre></div></div>
+
+
+      
+          <p><a class="prev" href="/db_tutorial/parts/part1.html">Part 1 - Introduction and Setting up the REPL</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part3.html">Part 3 - An In-Memory, Append-Only, Single-Table Database</a> <br></p>
+      
+
+      </section>
+      <footer>
+        
+        <p><a href="/db_tutorial/feed.xml">rss</a> | <a href="https://ifttt.com/applets/60708433d-rss-feed-to-email">subscribe by email</a></p>
+        <p>This project is maintained by <a href="https://github.com/cstack">cstack</a></p>
+        
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="/db_tutorial/assets/js/scale.fix.js"></script>
+
+
+  
+    <script>
+        (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+        (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+        m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+        })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+        ga('create', 'UA-105767942-1', 'auto');
+        ga('send', 'pageview');
+    </script>
+  
+  </body>
+</html>

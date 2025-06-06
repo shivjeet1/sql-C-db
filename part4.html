@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Part 4 - Our First Tests (and Bugs) | Let’s Build a Simple Database</title>
+<meta name="generator" content="Jekyll v3.9.5" />
+<meta property="og:title" content="Part 4 - Our First Tests (and Bugs)" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="We’ve got the ability to insert rows into our database and to print out all rows. Let’s take a moment to test what we’ve got so far." />
+<meta property="og:description" content="We’ve got the ability to insert rows into our database and to print out all rows. Let’s take a moment to test what we’ve got so far." />
+<link rel="canonical" href="https://cstack.github.io/db_tutorial/parts/part4.html" />
+<meta property="og:url" content="https://cstack.github.io/db_tutorial/parts/part4.html" />
+<meta property="og:site_name" content="Let’s Build a Simple Database" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2017-09-03T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Part 4 - Our First Tests (and Bugs)" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2017-09-03T00:00:00+00:00","datePublished":"2017-09-03T00:00:00+00:00","description":"We’ve got the ability to insert rows into our database and to print out all rows. Let’s take a moment to test what we’ve got so far.","headline":"Part 4 - Our First Tests (and Bugs)","mainEntityOfPage":{"@type":"WebPage","@id":"https://cstack.github.io/db_tutorial/parts/part4.html"},"url":"https://cstack.github.io/db_tutorial/parts/part4.html"}</script>
+<!-- End Jekyll SEO tag -->
+
+
+    <link rel="stylesheet" href="/db_tutorial/assets/css/style.css?v=60b50c5b7be787a4aaa1e50ab8a90c6cabb75159">
+    <meta name="viewport" content="width=device-width">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>Let's Build a Simple Database</h1>
+        <p>Writing a sqlite clone from scratch in C</p>
+
+        <p class="view"><a href="/db_tutorial/">Overview</a></p>
+
+        
+          <p class="view"><a href="https://github.com/cstack/db_tutorial">View on GitHub (pull requests welcome)</a></p>
+        
+
+        
+
+        
+
+        <div style="color:#721c24;background-color:#f8d7da;border-color:#f5c6cb;padding:.75rem 1.25rem;border-radius:.25rem;margin-bottom:1rem">
+          <p><b>This project is no longer under active development.</b> You can read more <a href="/db_tutorial/parts/part15.html">here</a>. But if you'd like to keep learning how to make your own SQLite clone from scratch, or one of many other projects like Docker, Redis, Git or BitTorrent, try <a href="https://app.codecrafters.io/join?via=cstack"><b>CodeCrafters</b></a>.</p>
+        </div>
+        <div>
+          <a href="https://app.codecrafters.io/join?via=cstack"><img src="https://cstack.github.io/db_tutorial/assets/images/code-crafters.jpeg" alt=""/></a>
+        </div>
+      </header>
+      <section>
+
+      
+      
+
+      <h1>Part 4 - Our First Tests (and Bugs)</h1>
+      
+          <p><a class="prev" href="/db_tutorial/parts/part3.html">Part 3 - An In-Memory, Append-Only, Single-Table Database</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part5.html">Part 5 - Persistence to Disk</a> <br></p>
+      
+
+      <p>We’ve got the ability to insert rows into our database and to print out all rows. Let’s take a moment to test what we’ve got so far.</p>
+
+<p>I’m going to use <a href="http://rspec.info/">rspec</a> to write my tests because I’m familiar with it, and the syntax is fairly readable.</p>
+
+<p>I’ll define a short helper to send a list of commands to our database program then make assertions about the output:</p>
+
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">describe</span> <span class="s1">'database'</span> <span class="k">do</span>
+  <span class="k">def</span> <span class="nf">run_script</span><span class="p">(</span><span class="n">commands</span><span class="p">)</span>
+    <span class="n">raw_output</span> <span class="o">=</span> <span class="kp">nil</span>
+    <span class="no">IO</span><span class="p">.</span><span class="nf">popen</span><span class="p">(</span><span class="s2">"./db"</span><span class="p">,</span> <span class="s2">"r+"</span><span class="p">)</span> <span class="k">do</span> <span class="o">|</span><span class="n">pipe</span><span class="o">|</span>
+      <span class="n">commands</span><span class="p">.</span><span class="nf">each</span> <span class="k">do</span> <span class="o">|</span><span class="n">command</span><span class="o">|</span>
+        <span class="n">pipe</span><span class="p">.</span><span class="nf">puts</span> <span class="n">command</span>
+      <span class="k">end</span>
+
+      <span class="n">pipe</span><span class="p">.</span><span class="nf">close_write</span>
+
+      <span class="c1"># Read entire output</span>
+      <span class="n">raw_output</span> <span class="o">=</span> <span class="n">pipe</span><span class="p">.</span><span class="nf">gets</span><span class="p">(</span><span class="kp">nil</span><span class="p">)</span>
+    <span class="k">end</span>
+    <span class="n">raw_output</span><span class="p">.</span><span class="nf">split</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
+  <span class="k">end</span>
+
+  <span class="n">it</span> <span class="s1">'inserts and retrieves a row'</span> <span class="k">do</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">run_script</span><span class="p">([</span>
+      <span class="s2">"insert 1 user1 person1@example.com"</span><span class="p">,</span>
+      <span class="s2">"select"</span><span class="p">,</span>
+      <span class="s2">".exit"</span><span class="p">,</span>
+    <span class="p">])</span>
+    <span class="n">expect</span><span class="p">(</span><span class="n">result</span><span class="p">).</span><span class="nf">to</span> <span class="n">match_array</span><span class="p">([</span>
+      <span class="s2">"db &gt; Executed."</span><span class="p">,</span>
+      <span class="s2">"db &gt; (1, user1, person1@example.com)"</span><span class="p">,</span>
+      <span class="s2">"Executed."</span><span class="p">,</span>
+      <span class="s2">"db &gt; "</span><span class="p">,</span>
+    <span class="p">])</span>
+  <span class="k">end</span>
+<span class="k">end</span>
+</code></pre></div></div>
+
+<p>This simple test makes sure we get back what we put in. And indeed it passes:</p>
+<pre><code class="language-command-line">bundle exec rspec
+.
+
+Finished in 0.00871 seconds (files took 0.09506 seconds to load)
+1 example, 0 failures
+</code></pre>
+
+<p>Now it’s feasible to test inserting a large number of rows into the database:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">it</span> <span class="s1">'prints error message when table is full'</span> <span class="k">do</span>
+  <span class="n">script</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">..</span><span class="mi">1401</span><span class="p">).</span><span class="nf">map</span> <span class="k">do</span> <span class="o">|</span><span class="n">i</span><span class="o">|</span>
+    <span class="s2">"insert </span><span class="si">#{</span><span class="n">i</span><span class="si">}</span><span class="s2"> user</span><span class="si">#{</span><span class="n">i</span><span class="si">}</span><span class="s2"> person</span><span class="si">#{</span><span class="n">i</span><span class="si">}</span><span class="s2">@example.com"</span>
+  <span class="k">end</span>
+  <span class="n">script</span> <span class="o">&lt;&lt;</span> <span class="s2">".exit"</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="n">run_script</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+  <span class="n">expect</span><span class="p">(</span><span class="n">result</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]).</span><span class="nf">to</span> <span class="n">eq</span><span class="p">(</span><span class="s1">'db &gt; Error: Table full.'</span><span class="p">)</span>
+<span class="k">end</span>
+</code></pre></div></div>
+
+<p>Running tests again…</p>
+<pre><code class="language-command-line">bundle exec rspec
+..
+
+Finished in 0.01553 seconds (files took 0.08156 seconds to load)
+2 examples, 0 failures
+</code></pre>
+
+<p>Sweet, it works! Our db can hold 1400 rows right now because we set the maximum number of pages to 100, and 14 rows can fit in a page.</p>
+
+<p>Reading through the code we have so far, I realized we might not handle storing text fields correctly. Easy to test with this example:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">it</span> <span class="s1">'allows inserting strings that are the maximum length'</span> <span class="k">do</span>
+  <span class="n">long_username</span> <span class="o">=</span> <span class="s2">"a"</span><span class="o">*</span><span class="mi">32</span>
+  <span class="n">long_email</span> <span class="o">=</span> <span class="s2">"a"</span><span class="o">*</span><span class="mi">255</span>
+  <span class="n">script</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">"insert 1 </span><span class="si">#{</span><span class="n">long_username</span><span class="si">}</span><span class="s2"> </span><span class="si">#{</span><span class="n">long_email</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+    <span class="s2">"select"</span><span class="p">,</span>
+    <span class="s2">".exit"</span><span class="p">,</span>
+  <span class="p">]</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="n">run_script</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+  <span class="n">expect</span><span class="p">(</span><span class="n">result</span><span class="p">).</span><span class="nf">to</span> <span class="n">match_array</span><span class="p">([</span>
+    <span class="s2">"db &gt; Executed."</span><span class="p">,</span>
+    <span class="s2">"db &gt; (1, </span><span class="si">#{</span><span class="n">long_username</span><span class="si">}</span><span class="s2">, </span><span class="si">#{</span><span class="n">long_email</span><span class="si">}</span><span class="s2">)"</span><span class="p">,</span>
+    <span class="s2">"Executed."</span><span class="p">,</span>
+    <span class="s2">"db &gt; "</span><span class="p">,</span>
+  <span class="p">])</span>
+<span class="k">end</span>
+</code></pre></div></div>
+
+<p>And the test fails!</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="no">Failures</span><span class="p">:</span>
+
+  <span class="mi">1</span><span class="p">)</span> <span class="n">database</span> <span class="n">allows</span> <span class="n">inserting</span> <span class="n">strings</span> <span class="n">that</span> <span class="n">are</span> <span class="n">the</span> <span class="n">maximum</span> <span class="n">length</span>
+     <span class="no">Failure</span><span class="o">/</span><span class="no">Error</span><span class="p">:</span> <span class="n">raw_output</span><span class="p">.</span><span class="nf">split</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
+
+     <span class="no">ArgumentError</span><span class="p">:</span>
+       <span class="n">invalid</span> <span class="n">byte</span> <span class="n">sequence</span> <span class="k">in</span> <span class="no">UTF</span><span class="o">-</span><span class="mi">8</span>
+     <span class="c1"># ./spec/main_spec.rb:14:in `split'</span>
+     <span class="c1"># ./spec/main_spec.rb:14:in `run_script'</span>
+     <span class="c1"># ./spec/main_spec.rb:48:in `block (2 levels) in &lt;top (required)&gt;'</span>
+</code></pre></div></div>
+
+<p>If we try it ourselves, we’ll see that there’s some weird characters when we try to print out the row. (I’m abbreviating the long strings):</p>
+<pre><code class="language-command-line">db &gt; insert 1 aaaaa... aaaaa...
+Executed.
+db &gt; select
+(1, aaaaa...aaa\�, aaaaa...aaa\�)
+Executed.
+db &gt;
+</code></pre>
+
+<p>What’s going on? If you take a look at our definition of a Row, we allocate exactly 32 bytes for username and exactly 255 bytes for email. But <a href="http://www.cprogramming.com/tutorial/c/lesson9.html">C strings</a> are supposed to end with a null character, which we didn’t allocate space for. The solution is to allocate one additional byte:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code> const uint32_t COLUMN_EMAIL_SIZE = 255;
+ typedef struct {
+   uint32_t id;
+<span class="gd">-  char username[COLUMN_USERNAME_SIZE];
+-  char email[COLUMN_EMAIL_SIZE];
+</span><span class="gi">+  char username[COLUMN_USERNAME_SIZE + 1];
++  char email[COLUMN_EMAIL_SIZE + 1];
+</span> } Row;
+</code></pre></div></div>
+
+<p>And indeed that fixes it:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">bundle</span> <span class="nb">exec</span> <span class="n">rspec</span>
+<span class="o">...</span>
+
+<span class="no">Finished</span> <span class="k">in</span> <span class="mf">0.0188</span> <span class="n">seconds</span> <span class="p">(</span><span class="n">files</span> <span class="n">took</span> <span class="mf">0.08516</span> <span class="n">seconds</span> <span class="n">to</span> <span class="nb">load</span><span class="p">)</span>
+<span class="mi">3</span> <span class="n">examples</span><span class="p">,</span> <span class="mi">0</span> <span class="n">failures</span>
+</code></pre></div></div>
+
+<p>We should not allow inserting usernames or emails that are longer than column size. The spec for that looks like this:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">it</span> <span class="s1">'prints error message if strings are too long'</span> <span class="k">do</span>
+  <span class="n">long_username</span> <span class="o">=</span> <span class="s2">"a"</span><span class="o">*</span><span class="mi">33</span>
+  <span class="n">long_email</span> <span class="o">=</span> <span class="s2">"a"</span><span class="o">*</span><span class="mi">256</span>
+  <span class="n">script</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">"insert 1 </span><span class="si">#{</span><span class="n">long_username</span><span class="si">}</span><span class="s2"> </span><span class="si">#{</span><span class="n">long_email</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+    <span class="s2">"select"</span><span class="p">,</span>
+    <span class="s2">".exit"</span><span class="p">,</span>
+  <span class="p">]</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="n">run_script</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+  <span class="n">expect</span><span class="p">(</span><span class="n">result</span><span class="p">).</span><span class="nf">to</span> <span class="n">match_array</span><span class="p">([</span>
+    <span class="s2">"db &gt; String is too long."</span><span class="p">,</span>
+    <span class="s2">"db &gt; Executed."</span><span class="p">,</span>
+    <span class="s2">"db &gt; "</span><span class="p">,</span>
+  <span class="p">])</span>
+<span class="k">end</span>
+</code></pre></div></div>
+
+<p>In order to do this we need to upgrade our parser. As a reminder, we’re currently using <a href="https://linux.die.net/man/3/scanf">scanf()</a>:</p>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if</span> <span class="p">(</span><span class="n">strncmp</span><span class="p">(</span><span class="n">input_buffer</span><span class="o">-&gt;</span><span class="n">buffer</span><span class="p">,</span> <span class="s">"insert"</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+  <span class="n">statement</span><span class="o">-&gt;</span><span class="n">type</span> <span class="o">=</span> <span class="n">STATEMENT_INSERT</span><span class="p">;</span>
+  <span class="kt">int</span> <span class="n">args_assigned</span> <span class="o">=</span> <span class="n">sscanf</span><span class="p">(</span>
+      <span class="n">input_buffer</span><span class="o">-&gt;</span><span class="n">buffer</span><span class="p">,</span> <span class="s">"insert %d %s %s"</span><span class="p">,</span> <span class="o">&amp;</span><span class="p">(</span><span class="n">statement</span><span class="o">-&gt;</span><span class="n">row_to_insert</span><span class="p">.</span><span class="n">id</span><span class="p">),</span>
+      <span class="n">statement</span><span class="o">-&gt;</span><span class="n">row_to_insert</span><span class="p">.</span><span class="n">username</span><span class="p">,</span> <span class="n">statement</span><span class="o">-&gt;</span><span class="n">row_to_insert</span><span class="p">.</span><span class="n">email</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">args_assigned</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="n">PREPARE_SYNTAX_ERROR</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">PREPARE_SUCCESS</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>But <a href="https://stackoverflow.com/questions/2430303/disadvantages-of-scanf">scanf has some disadvantages</a>. If the string it’s reading is larger than the buffer it’s reading into, it will cause a buffer overflow and start writing into unexpected places. We want to check the length of each string before we copy it into a <code class="language-plaintext highlighter-rouge">Row</code> structure. And to do that, we need to divide the input by spaces.</p>
+
+<p>I’m going to use <a href="http://www.cplusplus.com/reference/cstring/strtok/">strtok()</a> to do that. I think it’s easiest to understand if you see it in action:</p>
+
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
++  statement-&gt;type = STATEMENT_INSERT;
++
++  char* keyword = strtok(input_buffer-&gt;buffer, " ");
++  char* id_string = strtok(NULL, " ");
++  char* username = strtok(NULL, " ");
++  char* email = strtok(NULL, " ");
++
++  if (id_string == NULL || username == NULL || email == NULL) {
++    return PREPARE_SYNTAX_ERROR;
++  }
++
++  int id = atoi(id_string);
++  if (strlen(username) &gt; COLUMN_USERNAME_SIZE) {
++    return PREPARE_STRING_TOO_LONG;
++  }
++  if (strlen(email) &gt; COLUMN_EMAIL_SIZE) {
++    return PREPARE_STRING_TOO_LONG;
++  }
++
++  statement-&gt;row_to_insert.id = id;
++  strcpy(statement-&gt;row_to_insert.username, username);
++  strcpy(statement-&gt;row_to_insert.email, email);
++
++  return PREPARE_SUCCESS;
++}
++
+</span> PrepareResult prepare_statement(InputBuffer* input_buffer,
+                                 Statement* statement) {
+   if (strncmp(input_buffer-&gt;buffer, "insert", 6) == 0) {
+<span class="gi">+    return prepare_insert(input_buffer, statement);
+</span><span class="gd">-    statement-&gt;type = STATEMENT_INSERT;
+-    int args_assigned = sscanf(
+-        input_buffer-&gt;buffer, "insert %d %s %s", &amp;(statement-&gt;row_to_insert.id),
+-        statement-&gt;row_to_insert.username, statement-&gt;row_to_insert.email);
+-    if (args_assigned &lt; 3) {
+-      return PREPARE_SYNTAX_ERROR;
+-    }
+-    return PREPARE_SUCCESS;
+</span>   }
+</code></pre></div></div>
+
+<p>Calling <code class="language-plaintext highlighter-rouge">strtok</code> successively on the input buffer breaks it into substrings by inserting a null character whenever it reaches a delimiter (space, in our case). It returns a pointer to the start of the substring.</p>
+
+<p>We can call <a href="http://www.cplusplus.com/reference/cstring/strlen/">strlen()</a> on each text value to see if it’s too long.</p>
+
+<p>We can handle the error like we do any other error code:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code> enum PrepareResult_t {
+   PREPARE_SUCCESS,
+<span class="gi">+  PREPARE_STRING_TOO_LONG,
+</span>   PREPARE_SYNTAX_ERROR,
+   PREPARE_UNRECOGNIZED_STATEMENT
+ };
+</code></pre></div></div>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code> switch (prepare_statement(input_buffer, &amp;statement)) {
+   case (PREPARE_SUCCESS):
+     break;
+<span class="gi">+  case (PREPARE_STRING_TOO_LONG):
++    printf("String is too long.\n");
++    continue;
+</span>   case (PREPARE_SYNTAX_ERROR):
+     printf("Syntax error. Could not parse statement.\n");
+     continue;
+</code></pre></div></div>
+
+<p>Which makes our test pass</p>
+<pre><code class="language-command-line">bundle exec rspec
+....
+
+Finished in 0.02284 seconds (files took 0.116 seconds to load)
+4 examples, 0 failures
+</code></pre>
+
+<p>While we’re here, we might as well handle one more error case:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">it</span> <span class="s1">'prints an error message if id is negative'</span> <span class="k">do</span>
+  <span class="n">script</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">"insert -1 cstack foo@bar.com"</span><span class="p">,</span>
+    <span class="s2">"select"</span><span class="p">,</span>
+    <span class="s2">".exit"</span><span class="p">,</span>
+  <span class="p">]</span>
+  <span class="n">result</span> <span class="o">=</span> <span class="n">run_script</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+  <span class="n">expect</span><span class="p">(</span><span class="n">result</span><span class="p">).</span><span class="nf">to</span> <span class="n">match_array</span><span class="p">([</span>
+    <span class="s2">"db &gt; ID must be positive."</span><span class="p">,</span>
+    <span class="s2">"db &gt; Executed."</span><span class="p">,</span>
+    <span class="s2">"db &gt; "</span><span class="p">,</span>
+  <span class="p">])</span>
+<span class="k">end</span>
+</code></pre></div></div>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code> enum PrepareResult_t {
+   PREPARE_SUCCESS,
+<span class="gi">+  PREPARE_NEGATIVE_ID,
+</span>   PREPARE_STRING_TOO_LONG,
+   PREPARE_SYNTAX_ERROR,
+   PREPARE_UNRECOGNIZED_STATEMENT
+<span class="p">@@ -148,9 +147,6 @@</span> PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
+   }
+
+   int id = atoi(id_string);
+<span class="gi">+  if (id &lt; 0) {
++    return PREPARE_NEGATIVE_ID;
++  }
+</span>   if (strlen(username) &gt; COLUMN_USERNAME_SIZE) {
+     return PREPARE_STRING_TOO_LONG;
+   }
+<span class="p">@@ -230,9 +226,6 @@</span> int main(int argc, char* argv[]) {
+     switch (prepare_statement(input_buffer, &amp;statement)) {
+       case (PREPARE_SUCCESS):
+         break;
+<span class="gi">+      case (PREPARE_NEGATIVE_ID):
++        printf("ID must be positive.\n");
++        continue;
+</span>       case (PREPARE_STRING_TOO_LONG):
+         printf("String is too long.\n");
+         continue;
+</code></pre></div></div>
+
+<p>Alright, that’s enough testing for now. Next is a very important feature: persistence! We’re going to save our database to a file and read it back out again.</p>
+
+<p>It’s gonna be great.</p>
+
+<p>Here’s the complete diff for this part:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">@@ -22,6 +22,8 @@</span>
+
+ enum PrepareResult_t {
+   PREPARE_SUCCESS,
+<span class="gi">+  PREPARE_NEGATIVE_ID,
++  PREPARE_STRING_TOO_LONG,
+</span>   PREPARE_SYNTAX_ERROR,
+   PREPARE_UNRECOGNIZED_STATEMENT
+  };
+<span class="p">@@ -34,8 +36,8 @@</span>
+ #define COLUMN_EMAIL_SIZE 255
+ typedef struct {
+   uint32_t id;
+<span class="gd">-  char username[COLUMN_USERNAME_SIZE];
+-  char email[COLUMN_EMAIL_SIZE];
+</span><span class="gi">+  char username[COLUMN_USERNAME_SIZE + 1];
++  char email[COLUMN_EMAIL_SIZE + 1];
+</span> } Row;
+
+@@ -150,18 +152,40 @@ MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table *table) {
+   }
+ }
+
+-PrepareResult prepare_statement(InputBuffer* input_buffer,
+<span class="gd">-                                Statement* statement) {
+-  if (strncmp(input_buffer-&gt;buffer, "insert", 6) == 0) {
+</span><span class="gi">+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
+</span>   statement-&gt;type = STATEMENT_INSERT;
+<span class="gd">-  int args_assigned = sscanf(
+-     input_buffer-&gt;buffer, "insert %d %s %s", &amp;(statement-&gt;row_to_insert.id),
+-     statement-&gt;row_to_insert.username, statement-&gt;row_to_insert.email
+-     );
+-  if (args_assigned &lt; 3) {
+</span><span class="gi">+
++  char* keyword = strtok(input_buffer-&gt;buffer, " ");
++  char* id_string = strtok(NULL, " ");
++  char* username = strtok(NULL, " ");
++  char* email = strtok(NULL, " ");
++
++  if (id_string == NULL || username == NULL || email == NULL) {
+</span>      return PREPARE_SYNTAX_ERROR;
+   }
+<span class="gi">+
++  int id = atoi(id_string);
++  if (id &lt; 0) {
++     return PREPARE_NEGATIVE_ID;
++  }
++  if (strlen(username) &gt; COLUMN_USERNAME_SIZE) {
++     return PREPARE_STRING_TOO_LONG;
++  }
++  if (strlen(email) &gt; COLUMN_EMAIL_SIZE) {
++     return PREPARE_STRING_TOO_LONG;
++  }
++
++  statement-&gt;row_to_insert.id = id;
++  strcpy(statement-&gt;row_to_insert.username, username);
++  strcpy(statement-&gt;row_to_insert.email, email);
++
+</span>   return PREPARE_SUCCESS;
+<span class="gi">+
++}
++PrepareResult prepare_statement(InputBuffer* input_buffer,
++                                Statement* statement) {
++  if (strncmp(input_buffer-&gt;buffer, "insert", 6) == 0) {
++      return prepare_insert(input_buffer, statement);
+</span>   }
+   if (strcmp(input_buffer-&gt;buffer, "select") == 0) {
+     statement-&gt;type = STATEMENT_SELECT;
+<span class="p">@@ -223,6 +247,12 @@</span> int main(int argc, char* argv[]) {
+     switch (prepare_statement(input_buffer, &amp;statement)) {
+       case (PREPARE_SUCCESS):
+         break;
+<span class="gi">+      case (PREPARE_NEGATIVE_ID):
++	printf("ID must be positive.\n");
++	continue;
++      case (PREPARE_STRING_TOO_LONG):
++	printf("String is too long.\n");
++	continue;
+</span>       case (PREPARE_SYNTAX_ERROR):
+ 	printf("Syntax error. Could not parse statement.\n");
+ 	continue;
+</code></pre></div></div>
+<p>And we added tests:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+describe 'database' do
++  def run_script(commands)
++    raw_output = nil
++    IO.popen("./db", "r+") do |pipe|
++      commands.each do |command|
++        pipe.puts command
++      end
++
++      pipe.close_write
++
++      # Read entire output
++      raw_output = pipe.gets(nil)
++    end
++    raw_output.split("\n")
++  end
++
++  it 'inserts and retrieves a row' do
++    result = run_script([
++      "insert 1 user1 person1@example.com",
++      "select",
++      ".exit",
++    ])
++    expect(result).to match_array([
++      "db &gt; Executed.",
++      "db &gt; (1, user1, person1@example.com)",
++      "Executed.",
++      "db &gt; ",
++    ])
++  end
++
++  it 'prints error message when table is full' do
++    script = (1..1401).map do |i|
++      "insert #{i} user#{i} person#{i}@example.com"
++    end
++    script &lt;&lt; ".exit"
++    result = run_script(script)
++    expect(result[-2]).to eq('db &gt; Error: Table full.')
++  end
++
++  it 'allows inserting strings that are the maximum length' do
++    long_username = "a"*32
++    long_email = "a"*255
++    script = [
++      "insert 1 #{long_username} #{long_email}",
++      "select",
++      ".exit",
++    ]
++    result = run_script(script)
++    expect(result).to match_array([
++      "db &gt; Executed.",
++      "db &gt; (1, #{long_username}, #{long_email})",
++      "Executed.",
++      "db &gt; ",
++    ])
++  end
++
++  it 'prints error message if strings are too long' do
++    long_username = "a"*33
++    long_email = "a"*256
++    script = [
++      "insert 1 #{long_username} #{long_email}",
++      "select",
++      ".exit",
++    ]
++    result = run_script(script)
++    expect(result).to match_array([
++      "db &gt; String is too long.",
++      "db &gt; Executed.",
++      "db &gt; ",
++    ])
++  end
++
++  it 'prints an error message if id is negative' do
++    script = [
++      "insert -1 cstack foo@bar.com",
++      "select",
++      ".exit",
++    ]
++    result = run_script(script)
++    expect(result).to match_array([
++      "db &gt; ID must be positive.",
++      "db &gt; Executed.",
++      "db &gt; ",
++    ])
++  end
++end
+</span></code></pre></div></div>
+
+
+      
+          <p><a class="prev" href="/db_tutorial/parts/part3.html">Part 3 - An In-Memory, Append-Only, Single-Table Database</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part5.html">Part 5 - Persistence to Disk</a> <br></p>
+      
+
+      </section>
+      <footer>
+        
+        <p><a href="/db_tutorial/feed.xml">rss</a> | <a href="https://ifttt.com/applets/60708433d-rss-feed-to-email">subscribe by email</a></p>
+        <p>This project is maintained by <a href="https://github.com/cstack">cstack</a></p>
+        
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="/db_tutorial/assets/js/scale.fix.js"></script>
+
+
+  
+    <script>
+        (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+        (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+        m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+        })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+        ga('create', 'UA-105767942-1', 'auto');
+        ga('send', 'pageview');
+    </script>
+  
+  </body>
+</html>

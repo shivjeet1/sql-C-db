@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Part 3 - An In-Memory, Append-Only, Single-Table Database | Let’s Build a Simple Database</title>
+<meta name="generator" content="Jekyll v3.9.5" />
+<meta property="og:title" content="Part 3 - An In-Memory, Append-Only, Single-Table Database" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="We’re going to start small by putting a lot of limitations on our database. For now, it will:" />
+<meta property="og:description" content="We’re going to start small by putting a lot of limitations on our database. For now, it will:" />
+<link rel="canonical" href="https://cstack.github.io/db_tutorial/parts/part3.html" />
+<meta property="og:url" content="https://cstack.github.io/db_tutorial/parts/part3.html" />
+<meta property="og:site_name" content="Let’s Build a Simple Database" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2017-09-01T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Part 3 - An In-Memory, Append-Only, Single-Table Database" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2017-09-01T00:00:00+00:00","datePublished":"2017-09-01T00:00:00+00:00","description":"We’re going to start small by putting a lot of limitations on our database. For now, it will:","headline":"Part 3 - An In-Memory, Append-Only, Single-Table Database","mainEntityOfPage":{"@type":"WebPage","@id":"https://cstack.github.io/db_tutorial/parts/part3.html"},"url":"https://cstack.github.io/db_tutorial/parts/part3.html"}</script>
+<!-- End Jekyll SEO tag -->
+
+
+    <link rel="stylesheet" href="/db_tutorial/assets/css/style.css?v=60b50c5b7be787a4aaa1e50ab8a90c6cabb75159">
+    <meta name="viewport" content="width=device-width">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>Let's Build a Simple Database</h1>
+        <p>Writing a sqlite clone from scratch in C</p>
+
+        <p class="view"><a href="/db_tutorial/">Overview</a></p>
+
+        
+          <p class="view"><a href="https://github.com/cstack/db_tutorial">View on GitHub (pull requests welcome)</a></p>
+        
+
+        
+
+        
+
+        <div style="color:#721c24;background-color:#f8d7da;border-color:#f5c6cb;padding:.75rem 1.25rem;border-radius:.25rem;margin-bottom:1rem">
+          <p><b>This project is no longer under active development.</b> You can read more <a href="/db_tutorial/parts/part15.html">here</a>. But if you'd like to keep learning how to make your own SQLite clone from scratch, or one of many other projects like Docker, Redis, Git or BitTorrent, try <a href="https://app.codecrafters.io/join?via=cstack"><b>CodeCrafters</b></a>.</p>
+        </div>
+        <div>
+          <a href="https://app.codecrafters.io/join?via=cstack"><img src="https://cstack.github.io/db_tutorial/assets/images/code-crafters.jpeg" alt=""/></a>
+        </div>
+      </header>
+      <section>
+
+      
+      
+
+      <h1>Part 3 - An In-Memory, Append-Only, Single-Table Database</h1>
+      
+          <p><a class="prev" href="/db_tutorial/parts/part2.html">Part 2 - World's Simplest SQL Compiler and Virtual Machine</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part4.html">Part 4 - Our First Tests (and Bugs)</a> <br></p>
+      
+
+      <p>We’re going to start small by putting a lot of limitations on our database. For now, it will:</p>
+
+<ul>
+  <li>support two operations: inserting a row and printing all rows</li>
+  <li>reside only in memory (no persistence to disk)</li>
+  <li>support a single, hard-coded table</li>
+</ul>
+
+<p>Our hard-coded table is going to store users and look like this:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>column</th>
+      <th>type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>integer</td>
+    </tr>
+    <tr>
+      <td>username</td>
+      <td>varchar(32)</td>
+    </tr>
+    <tr>
+      <td>email</td>
+      <td>varchar(255)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>This is a simple schema, but it gets us to support multiple data types and multiple sizes of text data types.</p>
+
+<p><code class="language-plaintext highlighter-rouge">insert</code> statements are now going to look like this:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>insert 1 cstack foo@bar.com
+</code></pre></div></div>
+
+<p>That means we need to upgrade our <code class="language-plaintext highlighter-rouge">prepare_statement</code> function to parse arguments</p>
+
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   if (strncmp(input_buffer-&gt;buffer, "insert", 6) == 0) {
+     statement-&gt;type = STATEMENT_INSERT;
+<span class="gi">+    int args_assigned = sscanf(
++        input_buffer-&gt;buffer, "insert %d %s %s", &amp;(statement-&gt;row_to_insert.id),
++        statement-&gt;row_to_insert.username, statement-&gt;row_to_insert.email);
++    if (args_assigned &lt; 3) {
++      return PREPARE_SYNTAX_ERROR;
++    }
+</span>     return PREPARE_SUCCESS;
+   }
+   if (strcmp(input_buffer-&gt;buffer, "select") == 0) {
+</code></pre></div></div>
+
+<p>We store those parsed arguments into a new <code class="language-plaintext highlighter-rouge">Row</code> data structure inside the statement object:</p>
+
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+#define COLUMN_USERNAME_SIZE 32
++#define COLUMN_EMAIL_SIZE 255
++typedef struct {
++  uint32_t id;
++  char username[COLUMN_USERNAME_SIZE];
++  char email[COLUMN_EMAIL_SIZE];
++} Row;
++
+</span> typedef struct {
+   StatementType type;
+<span class="gi">+  Row row_to_insert;  // only used by insert statement
+</span> } Statement;
+</code></pre></div></div>
+
+<p>Now we need to copy that data into some data structure representing the table. SQLite uses a B-tree for fast lookups, inserts and deletes. We’ll start with something simpler. Like a B-tree, it will group rows into pages, but instead of arranging those pages as a tree it will arrange them as an array.</p>
+
+<p>Here’s my plan:</p>
+
+<ul>
+  <li>Store rows in blocks of memory called pages</li>
+  <li>Each page stores as many rows as it can fit</li>
+  <li>Rows are serialized into a compact representation with each page</li>
+  <li>Pages are only allocated as needed</li>
+  <li>Keep a fixed-size array of pointers to pages</li>
+</ul>
+
+<p>First we’ll define the compact representation of a row:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+#define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)-&gt;Attribute)
++
++const uint32_t ID_SIZE = size_of_attribute(Row, id);
++const uint32_t USERNAME_SIZE = size_of_attribute(Row, username);
++const uint32_t EMAIL_SIZE = size_of_attribute(Row, email);
++const uint32_t ID_OFFSET = 0;
++const uint32_t USERNAME_OFFSET = ID_OFFSET + ID_SIZE;
++const uint32_t EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE;
++const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
+</span></code></pre></div></div>
+
+<p>This means the layout of a serialized row will look like this:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>column</th>
+      <th>size (bytes)</th>
+      <th>offset</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>4</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>username</td>
+      <td>32</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>email</td>
+      <td>255</td>
+      <td>36</td>
+    </tr>
+    <tr>
+      <td>total</td>
+      <td>291</td>
+      <td> </td>
+    </tr>
+  </tbody>
+</table>
+
+<p>We also need code to convert to and from the compact representation.</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+void serialize_row(Row* source, void* destination) {
++  memcpy(destination + ID_OFFSET, &amp;(source-&gt;id), ID_SIZE);
++  memcpy(destination + USERNAME_OFFSET, &amp;(source-&gt;username), USERNAME_SIZE);
++  memcpy(destination + EMAIL_OFFSET, &amp;(source-&gt;email), EMAIL_SIZE);
++}
++
++void deserialize_row(void* source, Row* destination) {
++  memcpy(&amp;(destination-&gt;id), source + ID_OFFSET, ID_SIZE);
++  memcpy(&amp;(destination-&gt;username), source + USERNAME_OFFSET, USERNAME_SIZE);
++  memcpy(&amp;(destination-&gt;email), source + EMAIL_OFFSET, EMAIL_SIZE);
++}
+</span></code></pre></div></div>
+
+<p>Next, a <code class="language-plaintext highlighter-rouge">Table</code> structure that points to pages of rows and keeps track of how many rows there are:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+const uint32_t PAGE_SIZE = 4096;
++#define TABLE_MAX_PAGES 100
++const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
++const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
++
++typedef struct {
++  uint32_t num_rows;
++  void* pages[TABLE_MAX_PAGES];
++} Table;
+</span></code></pre></div></div>
+
+<p>I’m making our page size 4 kilobytes because it’s the same size as a page used in the virtual memory systems of most computer architectures. This means one page in our database corresponds to one page used by the operating system. The operating system will move pages in and out of memory as whole units instead of breaking them up.</p>
+
+<p>I’m setting an arbitrary limit of 100 pages that we will allocate. When we switch to a tree structure, our database’s maximum size will only be limited by the maximum size of a file. (Although we’ll still limit how many pages we keep in memory at once)</p>
+
+<p>Rows should not cross page boundaries. Since pages probably won’t exist next to each other in memory, this assumption makes it easier to read/write rows.</p>
+
+<p>Speaking of which, here is how we figure out where to read/write in memory for a particular row:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+void* row_slot(Table* table, uint32_t row_num) {
++  uint32_t page_num = row_num / ROWS_PER_PAGE;
++  void* page = table-&gt;pages[page_num];
++  if (page == NULL) {
++    // Allocate memory only when we try to access page
++    page = table-&gt;pages[page_num] = malloc(PAGE_SIZE);
++  }
++  uint32_t row_offset = row_num % ROWS_PER_PAGE;
++  uint32_t byte_offset = row_offset * ROW_SIZE;
++  return page + byte_offset;
++}
+</span></code></pre></div></div>
+
+<p>Now we can make <code class="language-plaintext highlighter-rouge">execute_statement</code> read/write from our table structure:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gd">-void execute_statement(Statement* statement) {
+</span><span class="gi">+ExecuteResult execute_insert(Statement* statement, Table* table) {
++  if (table-&gt;num_rows &gt;= TABLE_MAX_ROWS) {
++    return EXECUTE_TABLE_FULL;
++  }
++
++  Row* row_to_insert = &amp;(statement-&gt;row_to_insert);
++
++  serialize_row(row_to_insert, row_slot(table, table-&gt;num_rows));
++  table-&gt;num_rows += 1;
++
++  return EXECUTE_SUCCESS;
++}
++
++ExecuteResult execute_select(Statement* statement, Table* table) {
++  Row row;
++  for (uint32_t i = 0; i &lt; table-&gt;num_rows; i++) {
++    deserialize_row(row_slot(table, i), &amp;row);
++    print_row(&amp;row);
++  }
++  return EXECUTE_SUCCESS;
++}
++
++ExecuteResult execute_statement(Statement* statement, Table* table) {
+</span>   switch (statement-&gt;type) {
+     case (STATEMENT_INSERT):
+<span class="gd">-      printf("This is where we would do an insert.\n");
+-      break;
+</span><span class="gi">+      return execute_insert(statement, table);
+</span>     case (STATEMENT_SELECT):
+<span class="gd">-      printf("This is where we would do a select.\n");
+-      break;
+</span><span class="gi">+      return execute_select(statement, table);
+</span>   }
+ }
+</code></pre></div></div>
+
+<p>Lastly, we need to initialize the table, create the respective
+memory release function and handle a few more error cases:</p>
+
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gi">+ Table* new_table() {
++  Table* table = (Table*)malloc(sizeof(Table));
++  table-&gt;num_rows = 0;
++  for (uint32_t i = 0; i &lt; TABLE_MAX_PAGES; i++) {
++     table-&gt;pages[i] = NULL;
++  }
++  return table;
++}
++
++void free_table(Table* table) {
++    for (int i = 0; table-&gt;pages[i]; i++) {
++	free(table-&gt;pages[i]);
++    }
++    free(table);
++}
+</span></code></pre></div></div>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code> int main(int argc, char* argv[]) {
+<span class="gi">+  Table* table = new_table();
+</span>   InputBuffer* input_buffer = new_input_buffer();
+   while (true) {
+     print_prompt();
+<span class="p">@@ -105,13 +203,22 @@</span> int main(int argc, char* argv[]) {
+     switch (prepare_statement(input_buffer, &amp;statement)) {
+       case (PREPARE_SUCCESS):
+         break;
+<span class="gi">+      case (PREPARE_SYNTAX_ERROR):
++        printf("Syntax error. Could not parse statement.\n");
++        continue;
+</span>       case (PREPARE_UNRECOGNIZED_STATEMENT):
+         printf("Unrecognized keyword at start of '%s'.\n",
+                input_buffer-&gt;buffer);
+         continue;
+     }
+
+-    execute_statement(&amp;statement);
+<span class="gd">-    printf("Executed.\n");
+</span><span class="gi">+    switch (execute_statement(&amp;statement, table)) {
++      case (EXECUTE_SUCCESS):
++        printf("Executed.\n");
++        break;
++      case (EXECUTE_TABLE_FULL):
++        printf("Error: Table full.\n");
++        break;
++    }
+</span>   }
+ }
+</code></pre></div></div>
+
+<p>With those changes we can actually save data in our database!</p>
+<pre><code class="language-command-line">~ ./db
+db &gt; insert 1 cstack foo@bar.com
+Executed.
+db &gt; insert 2 bob bob@example.com
+Executed.
+db &gt; select
+(1, cstack, foo@bar.com)
+(2, bob, bob@example.com)
+Executed.
+db &gt; insert foo bar 1
+Syntax error. Could not parse statement.
+db &gt; .exit
+~
+</code></pre>
+
+<p>Now would be a great time to write some tests, for a couple reasons:</p>
+<ul>
+  <li>We’re planning to dramatically change the data structure storing our table, and tests would catch regressions.</li>
+  <li>There are a couple edge cases we haven’t tested manually (e.g. filling up the table)</li>
+</ul>
+
+<p>We’ll address those issues in the next part. For now, here’s the complete diff from this part:</p>
+<div class="language-diff highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">@@ -2,6 +2,7 @@</span>
+ #include &lt;stdio.h&gt;
+ #include &lt;stdlib.h&gt;
+ #include &lt;string.h&gt;
+<span class="gi">+#include &lt;stdint.h&gt;
+</span>
+ typedef struct {
+   char* buffer;
+<span class="p">@@ -10,6 +11,105 @@</span> typedef struct {
+ } InputBuffer;
+
++typedef enum { EXECUTE_SUCCESS, EXECUTE_TABLE_FULL } ExecuteResult;
+<span class="gi">+
++typedef enum {
++  META_COMMAND_SUCCESS,
++  META_COMMAND_UNRECOGNIZED_COMMAND
++} MetaCommandResult;
++
++typedef enum {
++  PREPARE_SUCCESS,
++  PREPARE_SYNTAX_ERROR,
++  PREPARE_UNRECOGNIZED_STATEMENT
++ } PrepareResult;
++
++typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
++
++#define COLUMN_USERNAME_SIZE 32
++#define COLUMN_EMAIL_SIZE 255
++typedef struct {
++  uint32_t id;
++  char username[COLUMN_USERNAME_SIZE];
++  char email[COLUMN_EMAIL_SIZE];
++} Row;
++
++typedef struct {
++  StatementType type;
++  Row row_to_insert; //only used by insert statement
++} Statement;
++
++#define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)-&gt;Attribute)
++
++const uint32_t ID_SIZE = size_of_attribute(Row, id);
++const uint32_t USERNAME_SIZE = size_of_attribute(Row, username);
++const uint32_t EMAIL_SIZE = size_of_attribute(Row, email);
++const uint32_t ID_OFFSET = 0;
++const uint32_t USERNAME_OFFSET = ID_OFFSET + ID_SIZE;
++const uint32_t EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE;
++const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
++
++const uint32_t PAGE_SIZE = 4096;
++#define TABLE_MAX_PAGES 100
++const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
++const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
++
++typedef struct {
++  uint32_t num_rows;
++  void* pages[TABLE_MAX_PAGES];
++} Table;
++
++void print_row(Row* row) {
++  printf("(%d, %s, %s)\n", row-&gt;id, row-&gt;username, row-&gt;email);
++}
++
++void serialize_row(Row* source, void* destination) {
++  memcpy(destination + ID_OFFSET, &amp;(source-&gt;id), ID_SIZE);
++  memcpy(destination + USERNAME_OFFSET, &amp;(source-&gt;username), USERNAME_SIZE);
++  memcpy(destination + EMAIL_OFFSET, &amp;(source-&gt;email), EMAIL_SIZE);
++}
++
++void deserialize_row(void *source, Row* destination) {
++  memcpy(&amp;(destination-&gt;id), source + ID_OFFSET, ID_SIZE);
++  memcpy(&amp;(destination-&gt;username), source + USERNAME_OFFSET, USERNAME_SIZE);
++  memcpy(&amp;(destination-&gt;email), source + EMAIL_OFFSET, EMAIL_SIZE);
++}
++
++void* row_slot(Table* table, uint32_t row_num) {
++  uint32_t page_num = row_num / ROWS_PER_PAGE;
++  void *page = table-&gt;pages[page_num];
++  if (page == NULL) {
++     // Allocate memory only when we try to access page
++     page = table-&gt;pages[page_num] = malloc(PAGE_SIZE);
++  }
++  uint32_t row_offset = row_num % ROWS_PER_PAGE;
++  uint32_t byte_offset = row_offset * ROW_SIZE;
++  return page + byte_offset;
++}
++
++Table* new_table() {
++  Table* table = (Table*)malloc(sizeof(Table));
++  table-&gt;num_rows = 0;
++  for (uint32_t i = 0; i &lt; TABLE_MAX_PAGES; i++) {
++     table-&gt;pages[i] = NULL;
++  }
++  return table;
++}
++
++void free_table(Table* table) {
++  for (int i = 0; table-&gt;pages[i]; i++) {
++     free(table-&gt;pages[i]);
++  }
++  free(table);
++}
++
+</span> InputBuffer* new_input_buffer() {
+   InputBuffer* input_buffer = (InputBuffer*)malloc(sizeof(InputBuffer));
+   input_buffer-&gt;buffer = NULL;
+<span class="p">@@ -40,17 +140,105 @@</span> void close_input_buffer(InputBuffer* input_buffer) {
+     free(input_buffer);
+ }
+
++MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table *table) {
+<span class="gi">+  if (strcmp(input_buffer-&gt;buffer, ".exit") == 0) {
++    close_input_buffer(input_buffer);
++    free_table(table);
++    exit(EXIT_SUCCESS);
++  } else {
++    return META_COMMAND_UNRECOGNIZED_COMMAND;
++  }
++}
++
++PrepareResult prepare_statement(InputBuffer* input_buffer,
++                                Statement* statement) {
++  if (strncmp(input_buffer-&gt;buffer, "insert", 6) == 0) {
++    statement-&gt;type = STATEMENT_INSERT;
++    int args_assigned = sscanf(
++	input_buffer-&gt;buffer, "insert %d %s %s", &amp;(statement-&gt;row_to_insert.id),
++	statement-&gt;row_to_insert.username, statement-&gt;row_to_insert.email
++	);
++    if (args_assigned &lt; 3) {
++	return PREPARE_SYNTAX_ERROR;
++    }
++    return PREPARE_SUCCESS;
++  }
++  if (strcmp(input_buffer-&gt;buffer, "select") == 0) {
++    statement-&gt;type = STATEMENT_SELECT;
++    return PREPARE_SUCCESS;
++  }
++
++  return PREPARE_UNRECOGNIZED_STATEMENT;
++}
++
++ExecuteResult execute_insert(Statement* statement, Table* table) {
++  if (table-&gt;num_rows &gt;= TABLE_MAX_ROWS) {
++     return EXECUTE_TABLE_FULL;
++  }
++
++  Row* row_to_insert = &amp;(statement-&gt;row_to_insert);
++
++  serialize_row(row_to_insert, row_slot(table, table-&gt;num_rows));
++  table-&gt;num_rows += 1;
++
++  return EXECUTE_SUCCESS;
++}
++
++ExecuteResult execute_select(Statement* statement, Table* table) {
++  Row row;
++  for (uint32_t i = 0; i &lt; table-&gt;num_rows; i++) {
++     deserialize_row(row_slot(table, i), &amp;row);
++     print_row(&amp;row);
++  }
++  return EXECUTE_SUCCESS;
++}
++
++ExecuteResult execute_statement(Statement* statement, Table *table) {
++  switch (statement-&gt;type) {
++    case (STATEMENT_INSERT):
++       	return execute_insert(statement, table);
++    case (STATEMENT_SELECT):
++	return execute_select(statement, table);
++  }
++}
++
+</span> int main(int argc, char* argv[]) {
+<span class="gi">+  Table* table = new_table();
+</span>   InputBuffer* input_buffer = new_input_buffer();
+   while (true) {
+     print_prompt();
+     read_input(input_buffer);
+
+-    if (strcmp(input_buffer-&gt;buffer, ".exit") == 0) {
+<span class="gd">-      close_input_buffer(input_buffer);
+-      exit(EXIT_SUCCESS);
+-    } else {
+-      printf("Unrecognized command '%s'.\n", input_buffer-&gt;buffer);
+</span><span class="gi">+    if (input_buffer-&gt;buffer[0] == '.') {
++      switch (do_meta_command(input_buffer, table)) {
++        case (META_COMMAND_SUCCESS):
++          continue;
++        case (META_COMMAND_UNRECOGNIZED_COMMAND):
++          printf("Unrecognized command '%s'\n", input_buffer-&gt;buffer);
++          continue;
++      }
++    }
++
++    Statement statement;
++    switch (prepare_statement(input_buffer, &amp;statement)) {
++      case (PREPARE_SUCCESS):
++        break;
++      case (PREPARE_SYNTAX_ERROR):
++	printf("Syntax error. Could not parse statement.\n");
++	continue;
++      case (PREPARE_UNRECOGNIZED_STATEMENT):
++        printf("Unrecognized keyword at start of '%s'.\n",
++               input_buffer-&gt;buffer);
++        continue;
++    }
++
++    switch (execute_statement(&amp;statement, table)) {
++	case (EXECUTE_SUCCESS):
++	    printf("Executed.\n");
++	    break;
++	case (EXECUTE_TABLE_FULL):
++	    printf("Error: Table full.\n");
++	    break;
+</span>     }
+   }
+ }
+</code></pre></div></div>
+
+
+      
+          <p><a class="prev" href="/db_tutorial/parts/part2.html">Part 2 - World's Simplest SQL Compiler and Virtual Machine</a> <br></p>
+      
+      
+          <p><a class="next" href="/db_tutorial/parts/part4.html">Part 4 - Our First Tests (and Bugs)</a> <br></p>
+      
+
+      </section>
+      <footer>
+        
+        <p><a href="/db_tutorial/feed.xml">rss</a> | <a href="https://ifttt.com/applets/60708433d-rss-feed-to-email">subscribe by email</a></p>
+        <p>This project is maintained by <a href="https://github.com/cstack">cstack</a></p>
+        
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="/db_tutorial/assets/js/scale.fix.js"></script>
+
+
+  
+    <script>
+        (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+        (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+        m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+        })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+        ga('create', 'UA-105767942-1', 'auto');
+        ga('send', 'pageview');
+    </script>
+  
+  </body>
+</html>
