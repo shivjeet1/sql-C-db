@@ -22,8 +22,14 @@ typedef struct {
 } Row;
 
 typedef struct {
-	uint32_t num_rows;
+	int file_descriptor;
+	uint32_t file_length;
 	void* pages[TABLE_MAX_PAGES];
+} Pager;
+
+typedef struct {
+	Pager* pager;
+	uint32_t num_rows;
 } Table;
 
 typedef enum { EXECUTE_SUCCESS, EXECUTE_TABLE_FULL } ExecuteResult;
@@ -36,6 +42,7 @@ typedef enum{
 typedef enum { 
 	PREPARE_SUCCESS,
 	PREPARE_SYNTAX_ERROR,
+	PREPARE_NEGATIVE_ID,
 	PREPARE_STRING_TOO_LONG,
 	PREPARE_UNRECOGNIZED_STATEMENT
 } PrepareResult;
@@ -113,11 +120,7 @@ void deserialize_row(void* source, Row* destination) {
 
 void* row_slot(Table* table, uint32_t row_num) {
 	uint32_t page_num = row_num / ROWS_PER_PAGE;
-	void* page = table->pages[page_num];
-	if (page == NULL) {
-		//allocate memory only when we try to access page
-		page = table->pages[page_num] = malloc(PAGE_SIZE);
-	}
+	void* page = get_page(table->pager, page_num);
 	uint32_t row_offset = row_num % ROWS_PER_PAGE;
 	uint32_t byte_offset = row_offset * ROW_SIZE;
 	return page + byte_offset;
@@ -136,6 +139,9 @@ PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
 	}
 
 	int id = atoi(id_string);
+	if (id < 0) {
+		return PREPARE_NEGATIVE_ID;
+	}
 	if (strlen(username) > COLUMN_USERNAME_SIZE) {
 		return PREPARE_STRING_TOO_LONG;
 	}
@@ -193,12 +199,68 @@ ExecuteResult execute_statement(Statement* statement, Table* table) {
 	}
 }
 
-Table* new_table() {
-	Table* table = (Table*)malloc(sizeof(Table));
-	table->num_rows = 0;
-	for (uint32_t i=0; table->pages[i]; i++) {
-		table->pages[i] = NULL;
+Pager* pager_open(const char* filename) {
+	int fd = open(filename,
+			0_RDWR |
+				0_CREAT,
+			S_IWUSR |
+				S_IRUSR
+		     );
+	if (fd == -1) {
+		printf("Unable to open file.\n");
+		exit(EXIT_FAILURE);
 	}
+
+	off_t file_length = lseek(fd, 0, SEEK_END);
+
+	Pager* pager = malloc(sizeof(Pager));
+	pager->file_descriptor = fd;
+	pager->file_length = file_length;
+
+	for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) {
+		pager->pages[i] = NULL;
+	}
+
+	return pager;
+}
+
+void* get_page(Pager* pager, uint32_t page_num) {
+	if (page_num > TABLE_MAX_PAGES) {
+		printf("Tried to fetch page number out of bounds. %d > %d .\n", page_num, TABLE_MAX_PAGES);
+		exit(EXIT_FAILURE);
+	}
+	
+	if (pager->pages[page_num == NULL) {
+		//Cache miss. Allocate memory and load from file
+		void* page = malloc(PAGE_SIZE);
+		uint32_t num_pages = pager->file_length / PAGE_SIZE;
+
+		//We might save a partial page at the end of the file
+		if ( pager->file_length % PAGE_SIZE) {
+			num_pages += 1;
+		}
+
+		if (page_num <= num_pages) {
+			lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+			ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
+			if (bytes_read == -1) {
+				printf("Error reading file: %d\n", errno);
+				exit(EXIT_FAILURE);
+			}
+		}
+		pager->pages[page_num] = page;
+	}
+	return pager->pages[page_num];
+}
+
+Table* db_open(const char* filename) {
+	Pager* pager = pager_open(filename);
+	uint32_t num_rows = pager->file_length / ROW_SIZE;
+
+	Table* table = malloc(sizeof(Table));
+	table->pager = pager;
+	table->num_rows = num_row;
+	
 	return table;
 }
 
@@ -230,6 +292,9 @@ int main(int argc, char* argv[]) {
 		switch(prepare_statement(input_buffer, &statement)) {
 			case (PREPARE_SUCCESS):
 				break;
+			case (PREPARE_NEGATIVE_ID):
+				printf("ID must be positive.\n");
+				continue;
 			case (PREPARE_STRING_TOO_LONG):
 				printf("String is too long.\n");
 				continue;
