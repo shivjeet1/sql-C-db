@@ -102,21 +102,21 @@ const uint8_t COMMON_NODE_HEADER_SIZE =
 	NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
 
 /*Internal Node Header Layout*/
- const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
- const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
- const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
- const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET =
-	 INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE;
- const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE +
+const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
+const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET =
+	INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE;
+const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE +
 											INTERNAL_NODE_NUM_KEYS_SIZE +
 											INTERNAL_NODE_RIGHT_CHILD_SIZE;
 /*Internal Node Body Layout*/
- const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
- const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
- const uint32_t INTERNAL_NODE_CELL_SIZE =
-	 INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
- /* Keep this small for testing */
- const uint32_t INTERNAL_NODE_MAX_KEYS = 3;
+const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_CELL_SIZE =
+	INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
+/* Keep this small for testing */
+const uint32_t INTERNAL_NODE_MAX_KEYS = 3;
 
 /*Leaf Node Header Layout*/
 const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
@@ -156,12 +156,59 @@ bool is_node_root(void* node) {
 	*((uint8_t*)(node + NODE_TYPE_OFFSET)) = value;
 }
 
+void set_node_root(void* node, bool is_root) {
+	uint8_t value = is_root;
+	*((uint8_t*)(node + IS_ROOT_OFFSET)) = value;
+}
+
+uint32_t* node_parent(void* node) { return node + PARENT_POINTER_OFFSET; }
+
+uint32_t* internal_node_num_keys(void* node) {
+	return node + INTERNAL_NODE_NUM_KEYS_OFFSET;
+}
+  
+uint32_t* internal_node_right_child(void* node) {
+	return node + INTERNAL_NODE_RIGHT_CHILD_OFFSET;
+}
+  
+uint32_t* internal_node_cell(void* node, uint32_t cell_num) {
+	return node + INTERNAL_NODE_HEADER_SIZE + cell_num * INTERNAL_NODE_CELL_SIZE;
+}
+  
+uint32_t* internal_node_child(void* node, uint32_t child_num) {
+	uint32_t num_keys = *internal_node_num_keys(node);
+	if (child_num > num_keys) {
+	  printf("Tried to access child_num %d > num_keys %d\n", child_num, num_keys);
+	  exit(EXIT_FAILURE);
+	} else if (child_num == num_keys) {
+	  uint32_t* right_child = internal_node_right_child(node);
+	  if (*right_child == INVALID_PAGE_NUM) {
+		printf("Tried to access right child of node, but was invalid page\n");
+		exit(EXIT_FAILURE);
+	  }
+	  return right_child;
+	} else {
+	  uint32_t* child = internal_node_cell(node, child_num);
+	  if (*child == INVALID_PAGE_NUM) {
+		printf("Tried to access child %d of node, but was invalid page\n", child_num);
+		exit(EXIT_FAILURE);
+	  }
+	  return child;
+	}
+}
+
+uint32_t* internal_node_key(void* node, uint32_t key_num) {
+	return (void*)internal_node_cell(node, key_num) + INTERNAL_NODE_CHILD_SIZE;
+}
 
 /*Accessing Leaf Node Fields*/
 uint32_t leaf_node_num_cells(void* node) {
 	return node + LEAF_NODE_NUM_CELLS_OFFSET;
 }
-uint32_t leaf_node_cell(void* node, uint32)t cell_num) {
+uint32_t leaf_node_next_leaf(void* node) {
+	return node + LEAF_NODE_NEXT_LEAF_OFFSET;
+}
+void leaf_node_cell(void* node, uint32_t cell_num) {
 	return node + LEAF_NODE_HEADER_SIZE + cell_num * LEAF_NODE_CELL_SIZE;
 }
 uint32_t leaf_node_key(void* node, uint32_t cell_num) {
@@ -169,6 +216,40 @@ uint32_t leaf_node_key(void* node, uint32_t cell_num) {
 }
 void* leaf_node_value(void* node, uint32_t cell_num) {
 	return leaf_node_cell(node, cell_num) + LEAF_NODE_KEY_SIZE;
+}
+
+void* get_page(Pager* pager, uint32_t page_num) {
+	if (page_num > TABLE_MAX_PAGES) {
+		printf("Tried to fetch page number out of bounds. %d > %d .\n", page_num, TABLE_MAX_PAGES);
+		exit(EXIT_FAILURE);
+	}
+	
+	if (pager->pages[page_num] == NULL) {
+		//Cache miss. Allocate memory and load from file
+		void* page = malloc(PAGE_SIZE);
+		uint32_t num_pages = pager->file_length / PAGE_SIZE;
+
+		//We might save a partial page at the end of the file
+		if ( pager->file_length % PAGE_SIZE) {
+			num_pages += 1;
+		}
+
+		if (page_num <= num_pages) {
+			lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+			ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
+			if (bytes_read == -1) {
+				printf("Error reading file: %d\n", errno);
+				exit(EXIT_FAILURE);
+			}
+		}
+		pager->pages[page_num] = page;
+
+		if (page_num >= pager->num_pages) {
+			pager->num_pages = page_num +1;
+		}
+	}
+
+	return pager->pages[page_num];
 }
 
 void print_constants() {
@@ -234,39 +315,6 @@ void deserialize_row(void* source, Row* destination) {
 	memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
-void* get_page(Pager* pager, uint32_t page_num) {
-	if (page_num > TABLE_MAX_PAGES) {
-		printf("Tried to fetch page number out of bounds. %d > %d .\n", page_num, TABLE_MAX_PAGES);
-		exit(EXIT_FAILURE);
-	}
-	
-	if (pager->pages[page_num] == NULL) {
-		//Cache miss. Allocate memory and load from file
-		void* page = malloc(PAGE_SIZE);
-		uint32_t num_pages = pager->file_length / PAGE_SIZE;
-
-		//We might save a partial page at the end of the file
-		if ( pager->file_length % PAGE_SIZE) {
-			num_pages += 1;
-		}
-
-		if (page_num <= num_pages) {
-			lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
-			ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
-			if (bytes_read == -1) {
-				printf("Error reading file: %d\n", errno);
-				exit(EXIT_FAILURE);
-			}
-		}
-		pager->pages[page_num] = page;
-
-		if (page_num >= pager->num_pages) {
-			pager->num_pages = page_num +1;
-		}
-	}
-
-	return pager->pages[page_num];
-}
 
 Cursor* table_start(Table* table) {
 	Cursor* cursor = malloc(sizeof(Cursor));
