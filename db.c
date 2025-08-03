@@ -252,14 +252,61 @@ void* get_page(Pager* pager, uint32_t page_num) {
 	return pager->pages[page_num];
 }
 
+uint32_t get_node_max_key(Pager* pager, void* node){
+	if (get_node_type(node) == NODE_LEAF) {
+		return *leaf_node_key(node, *leaf_node_num_cells(node) - 1);
+	}
+	void* right_child = get_page(pager, *internal_node_right_child(node));
+	return get_node_max_key(pager, right_child);
+}
+
 void print_constants() {
 	printf("ROW_SIZE: %d\n", ROW_SIZE);
 	printf("COMMON_NODE_HEADER_SIZE: %d\n", COMMON_NODE_HEADER_SIZE);
 	printf("LEAF_NODE_HEADER_SIZE: %d\n", LEAF_NODE_HEADER_SIZE);
 	printf("LEAF_NODE_CELL_SIZE: %d\n", LEAF_NODE_CELL_SIZE);
-	printf("LEAF_NODE_MAX_CELLS: %d\n", LEAF_NODE_MAX_CELLS);
 	printf("LEAF_NODE_SPACE_FOR_CELLS: %d\n", LEAF_NODE_SPACE_FOR_CELLS);
+	printf("LEAF_NODE_MAX_CELLS: %d\n", LEAF_NODE_MAX_CELLS);
 }
+
+void indent(uint32_t level) {
+	for (uint32_t i = 0; i < level; i++) {
+		printf("   ");
+	}
+}
+
+void print_tree(Pager* pager, uint32_t page_num, uint32_t indentation_level) {
+	void* node = get_page(pager, page_num);
+	uint32_t num_keys, child;
+
+	switch (get_node_type(node)) {
+		case (NODE_LEAF):
+			num_keys = *leaf_node_num_cells(node);
+			indent(indentation_level);
+			printf("- leaf (size %d)\n", num_keys);
+			for (uint32_t i = 0; i < num_keys; i++) {
+				indent(indentation_level + 1);
+				printf("- %d\n", *leaf_node_key(node, i));
+			}
+			break;
+		case (NODE_INTERNAL):
+			num_keys = *internal_node_num_keys(node);
+      		indent(indentation_level);
+      		printf("- internal (size %d)\n", num_keys);
+    		if (num_keys > 0) {
+        		for (uint32_t i = 0; i < num_keys; i++) {
+          			child = *internal_node_child(node, i);
+      				print_tree(pager, child, indentation_level + 1);
+          			indent(indentation_level + 1);
+			        printf("- key %d\n", *internal_node_key(node, i));
+        }
+        child = *internal_node_right_child(node);
+        print_tree(pager, child, indentation_level + 1);
+      }
+      break;
+  }
+}
+
 
 void print_leaf_node(void* node) {
 	uint32_t num_cells = *leaf_node_num_cells(node);
@@ -269,39 +316,6 @@ void print_leaf_node(void* node) {
 		printf("   - %d : %d\n", i, key);
 	}
 }
-
-void initialize_leaf_node(void* node) {
-	set_node_type(node, NODE_LEAF);
-	*leaf_node_num_cells(node) = 0;
-}
-
-
-InputBuffer* new_input_buffer() {
-	InputBuffer* input_buffer = (InputBuffer*)malloc(sizeof(InputBuffer));
-	input_buffer->buffer=NULL;
-	input_buffer->buffer_length = 0;
-	input_buffer->input_length = 0;
-
-	return input_buffer;
-}
-
-void read_input(InputBuffer* input_buffer) {
-	ssize_t bytes_read = getline(&(input_buffer->buffer), &(input_buffer->buffer_length), stdin);
-	if(bytes_read<=0) {
-		printf("Error reading input\n");
-		exit(EXIT_FAILURE);
-	}
-	//Ignore trailing newline
-	input_buffer->input_length = bytes_read - 1;
-	input_buffer->buffer[bytes_read - 1] = 0;
-}
-
-void close_input_buffer(InputBuffer* input_buffer) {
-	free(input_buffer->buffer);
-	free(input_buffer);
-}
-
-void print_prompt() { printf("db > "); }
 
 void serialize_row(Row* source, void* destination) {
 	memcpy(destination + ID_OFFSET, &(source->id), ID_SIZE);
@@ -315,19 +329,22 @@ void deserialize_row(void* source, Row* destination) {
 	memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
+void initialize_leaf_node(void* node) {
+	set_node_type(node, NODE_LEAF);
+	set_node_root(node, false);
+	*leaf_node_num_cells(node) = 0;
+	*leaf_node_next_leaf(node) = 0; //no sibling available
 
-Cursor* table_start(Table* table) {
-	Cursor* cursor = malloc(sizeof(Cursor));
-	cursor->table = table;
-	cursor->page_num = table->root_page_num;
-	cursor->cell_num = 0;
+}
 
-	void* root_node = get_page(table->pager, table->root_page_num);
-	uint32_t num_cells = *leaf_node_num_cells(root_node);
-	cursor->end_of_table = (num_cells == 0;
-
-	
-	return cursor;
+void initialize_internal_node(void* node) {
+	set_node_type(node, NODE_INTERNAL);
+	set_node_root(node, false);
+	*internal_node_num_keys(node) = 0;
+	/*Necessary because the root page number is 0; by not initializing an internal node's right
+	child to an invalid page number when initializing the node, we may end up with 0 as the node's
+	right child, which makes the node a parent of the root*/
+	*internal_node_right_child(node) = INVALID_PAGE_NUM; //no right child
 }
 
 Cursor* leaf_node_find(Table* table, uint32_t page_num, uint32_t key) {
@@ -360,7 +377,41 @@ Cursor* leaf_node_find(Table* table, uint32_t page_num, uint32_t key) {
 }
 
 
+uint32_t internal_node_find_child(void* node, uint32_t key) {
+	/*Return the index of the child which should contain the given key.*/
+  
+	uint32_t num_keys = *internal_node_num_keys(node);
+  
+	/* Binary search */
+	uint32_t min_index = 0;
+	uint32_t max_index = num_keys; /* there is one more child than key */
+  
+	while (min_index != max_index) {
+	  uint32_t index = (min_index + max_index) / 2;
+	  uint32_t key_to_right = *internal_node_key(node, index);
+	  if (key_to_right >= key) {
+		max_index = index;
+	  } else {
+		min_index = index + 1;
+	  }
+	}
+  
+	return min_index;
+}
 
+Cursor* internal_node_find(Table* table, uint32_t page_num, uint32_t key) {
+	void* node = get_page(table->pager, page_num);
+
+	uint32_t child_index = internal_node_find_child(node, key);
+	uint32_t child_num = *internal_node_child(node, child_index);
+	void* child = get_page(table->pager, child_num);
+	switch (get_node_type(child)) {
+	  case NODE_LEAF:
+		return leaf_node_find(table, child_num, key);
+	  case NODE_INTERNAL:
+		return internal_node_find(table, child_num, key);
+	}
+}
 
 /*Return the position of the given key.
 If the key is not present, return the position
@@ -376,6 +427,52 @@ Cursor* table_find(Table* table, uint32_t key) {
 		exit(EXIT_FAILURE);
 	}
 }
+
+InputBuffer* new_input_buffer() {
+	InputBuffer* input_buffer = (InputBuffer*)malloc(sizeof(InputBuffer));
+	input_buffer->buffer=NULL;
+	input_buffer->buffer_length = 0;
+	input_buffer->input_length = 0;
+
+	return input_buffer;
+}
+
+void read_input(InputBuffer* input_buffer) {
+	ssize_t bytes_read = getline(&(input_buffer->buffer), &(input_buffer->buffer_length), stdin);
+	if(bytes_read<=0) {
+		printf("Error reading input\n");
+		exit(EXIT_FAILURE);
+	}
+	//Ignore trailing newline
+	input_buffer->input_length = bytes_read - 1;
+	input_buffer->buffer[bytes_read - 1] = 0;
+}
+
+void close_input_buffer(InputBuffer* input_buffer) {
+	free(input_buffer->buffer);
+	free(input_buffer);
+}
+
+void print_prompt() { printf("db > "); }
+
+
+Cursor* table_start(Table* table) {
+	Cursor* cursor = malloc(sizeof(Cursor));
+	cursor->table = table;
+	cursor->page_num = table->root_page_num;
+	cursor->cell_num = 0;
+
+	void* root_node = get_page(table->pager, table->root_page_num);
+	uint32_t num_cells = *leaf_node_num_cells(root_node);
+	cursor->end_of_table = (num_cells == 0;
+
+	
+	return cursor;
+}
+
+
+
+
 
 void* cursor_value(Cursor* cursor) {
 	uint32_t page_num = cursor->page_num;
@@ -491,6 +588,7 @@ void db_close(Table* table) {
 	free(pager);
 	free(table);
 }
+
 MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table) {
 	if (strcmp(input_buffer->buffer, ".exit") == 0) {
 		db_close(table);
