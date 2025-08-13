@@ -1,4 +1,4 @@
-# Simple SQL Database in C 💾
+# Simple SQL Database in C 
 
 This project is a lightweight, from-scratch implementation of a relational database similar to SQLite, written entirely in **C**. It features a command-line interface (REPL) for executing SQL queries, persists data to a file, and uses a **B-Tree** data structure for efficient data organization and retrieval.
 
@@ -38,7 +38,7 @@ You'll need `git`, `make`, and a C compiler like `gcc` installed.
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/shivjeet1/sql-C-db.git](https://github.com/shivjeet1/sql-C-db.git)
+    git clone https://github.com/shivjeet1/sql-C-db.git
     ```
 2.  **Navigate to the project directory:**
     ```bash
@@ -94,7 +94,7 @@ You must provide a database filename when running the program. The database will
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+- This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
 
